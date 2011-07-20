@@ -90,6 +90,11 @@ module Carrot::AMQP
 
   private
 
+    def handle_socket_exception(ex)
+      close_socket 
+      raise ServerDown, ex.message
+    end
+
     def buffer
       @buffer ||= Buffer.new(self)
     end
@@ -98,7 +103,7 @@ module Carrot::AMQP
       begin
         socket.__send__(cmd, *args)
       rescue Errno::EPIPE, IOError, Errno::ECONNRESET, Errno::EINVAL => e
-        raise ServerDown, e.message
+        handle_socket_exception(e)
       end
     end
 
@@ -133,12 +138,22 @@ module Carrot::AMQP
           @socket.setsockopt Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1
         end
 
+        ## timeout to two seconds, not exposed in an elegant way
+        begin
+          secs   = Integer(2)
+          usecs  = Integer(0)
+          optval = [secs, usecs].pack("l_2")
+          @socket.setsockopt Socket::SOL_SOCKET, Socket::SO_RCVTIMEO, optval
+          @socket.setsockopt Socket::SOL_SOCKET, Socket::SO_SNDTIMEO, optval
+        rescue Errno::ENOPROTOOPT
+        end
+
         start_ssl if @use_ssl
 
         @status   = 'CONNECTED'
       rescue SocketError, SystemCallError, IOError, Timeout::Error => e
         msg = e.message << " - #{@host}:#{@port}"
-        raise ServerDown, e.message
+        handle_socket_exception(e)
       ensure
         mutex.unlock if multithread?
       end
